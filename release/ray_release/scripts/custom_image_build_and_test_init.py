@@ -2,6 +2,7 @@ import glob
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -154,6 +155,15 @@ def _split_into_batches(
     type=str,
     help="Output file for RAYCI_SELECT (comma-separated base-image publish step keys).",
 )
+@click.option(
+    "--upload-to-buildkite",
+    is_flag=True,
+    default=False,
+    help=(
+        "After writing chunk files, upload each one in order via "
+        "`buildkite-agent pipeline upload`."
+    ),
+)
 def main(
     test_collection_file: Tuple[str],
     run_jailed_tests: bool = False,
@@ -166,6 +176,7 @@ def main(
     test_jobs_output_file: str = None,
     max_jobs_per_upload: int = DEFAULT_MAX_JOBS_PER_UPLOAD,
     rayci_select_output_file: str = None,
+    upload_to_buildkite: bool = False,
 ):
     global_config_file = os.path.join(
         os.path.dirname(__file__), "..", "configs", global_config
@@ -279,12 +290,14 @@ def main(
             os.path.join(_bazel_workspace_dir, f"{output_stem}_*{output_ext}")
         ):
             os.remove(stale)
+        chunk_paths = []
         for i, batch in enumerate(batches):
             chunk_path = os.path.join(
                 _bazel_workspace_dir, f"{output_stem}_{i}{output_ext}"
             )
             with open(chunk_path, "wt") as fp:
                 json.dump(batch, fp)
+            chunk_paths.append(chunk_path)
         logger.info(
             f"Wrote {len(batches)} chunk file(s) for "
             f"{sum(_group_job_count(g) for g in steps)} total jobs."
@@ -298,6 +311,14 @@ def main(
                 "wt",
             ) as fp:
                 fp.write(",".join(sorted(rayci_select_keys)))
+
+        if upload_to_buildkite:
+            for chunk_path in chunk_paths:
+                logger.info(f"Uploading {chunk_path}")
+                subprocess.run(
+                    ["buildkite-agent", "pipeline", "upload", chunk_path],
+                    check=True,
+                )
 
         settings["frequency"] = settings["frequency"].value
         settings["priority"] = settings["priority"].value
